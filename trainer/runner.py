@@ -4,13 +4,21 @@ import time
 import gymnasium as gym
 import ale_py
 
-from stable_baselines3 import PPO
+# 1. IMPORT THE NEW ALGORITHMS
+from stable_baselines3 import PPO, A2C, DQN
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env.vec_transpose import VecTransposeImage
 
 from .envs import make_atari_env
 from .callbacks import EarlyStopOnReward
+
+# 2. CREATE A MAP OF ALGORITHM NAMES TO THEIR CLASSES
+ALGO_MAP = {
+    "PPO": PPO,
+    "A2C": A2C,
+    "DQN": DQN,
+}
 
 
 class Trainer:
@@ -24,25 +32,41 @@ class Trainer:
         self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)
 
+    # 3. THIS IS THE MODIFIED MODEL FACTORY
     def _make_model(self, env):
-        """Create the PPO model with standard hyperparameters."""
-        model = PPO(
-            policy="CnnPolicy",
+        """Create the SB3 model based on the config."""
+        
+        # Get the algorithm name and class (now set by CLI or YAML)
+        algo_name = self.cfg.get("algorithm", "PPO")
+        if algo_name not in ALGO_MAP:
+            raise ValueError(f"Unknown algorithm: {algo_name}. Must be one of {list(ALGO_MAP.keys())}")
+        
+        AlgoClass = ALGO_MAP[algo_name]
+        
+        # Get the nested hyperparameters for that specific algorithm
+        try:
+            algo_params = self.cfg.get("algo_params", {}).get(algo_name, {})
+        except Exception:
+            raise ValueError(f"No 'algo_params.{algo_name}' found in config.")
+
+        if not algo_params:
+             print(f"[Trainer] Warning: No hyperparameters found for {algo_name} in config, using defaults.")
+
+        print(f"[Trainer] Initializing model for {algo_name} with params: {algo_params}")
+        
+        # Create the model, unpacking the params dict
+        model = AlgoClass(
             env=env,
-            learning_rate=self.cfg.get("learning_rate", 2.5e-4),
-            n_steps=self.cfg.get("n_steps", 128),
-            batch_size=self.cfg.get("batch_size", 256),
-            n_epochs=self.cfg.get("n_epochs", 4),
-            gamma=self.cfg.get("gamma", 0.99),
-            ent_coef=self.cfg.get("ent_coef", 0.01),
-            clip_range=self.cfg.get("clip_range", 0.1),
             verbose=1,
-            device=self.cfg.get("device", "cpu"),
+            device=self.cfg.get("device", "cpu"), 
+            tensorboard_log=self.log_dir, # Pass the log_dir here
+            **algo_params  
         )
         return model
 
     def train(self):
-        """Main training loop — builds envs, model, callbacks, and runs PPO.learn()."""
+        """Main training loop — builds envs, model, callbacks, and runs .learn()."""
+        # --- Config reading ---
         env_id = self.cfg.get("env_id", "ALE/Pong-v5")
         n_envs = int(self.cfg.get("n_envs", 8))
         frame_stack = int(self.cfg.get("frame_stack", 4))
@@ -50,14 +74,17 @@ class Trainer:
         use_subproc = bool(self.cfg.get("use_subproc", True))
 
         print(f"[Trainer] Building envs: {env_id} (n_envs={n_envs}, frame_stack={frame_stack})")
+        
+        # --- Env creation ---
         env = make_atari_env(env_id, n_envs=n_envs, seed=seed, frame_stack=frame_stack, use_subproc=use_subproc)
 
-        # Set up the logger: stdout, CSV, and TensorBoard
+        # --- Logger ---
+        # Note: We pass tensorboard_log to the model, but configure() sets up CSV/stdout
         new_logger = configure(self.log_dir, ["stdout", "csv", "tensorboard"])
 
-        # Initialize PPO model
+        # --- Model creation ---
         model = self._make_model(env)
-        model.set_logger(new_logger)
+        model.set_logger(new_logger) # Connect the CSV/stdout logger
 
         # --- Callbacks setup ---
 
@@ -75,27 +102,16 @@ class Trainer:
         eval_freq_per_env = max(1, eval_freq // max(1, n_envs))
         n_eval_episodes = int(self.cfg.get("n_eval_episodes", 10))
 
-        # Create eval env with the same vectorization backend as training to avoid
-        # "Training and eval env are not of the same type" warnings from SB3.
         eval_env = make_atari_env(
             env_id, n_envs=1, seed=seed + 42, frame_stack=frame_stack, use_subproc=use_subproc
         )
 
-        # Ensure eval env has the same top-level Vec wrapper as the training env.
-        # SB3 sometimes wraps the training env in VecTransposeImage (to reorder
-        # image channels) when the model is created; if so, wrap the eval_env
-        # the same way to avoid the SB3 warning about mismatched env types.
         try:
-            # If SB3 wrapped the training env in VecTransposeImage (it does this
-            # automatically for image observations), wrap the eval_env the same
-            # way so the top-level types match and SB3 won't warn.
             if isinstance(model.get_env(), VecTransposeImage) or (
                 "VecTransposeImage" in repr(model.get_env())
             ):
                 eval_env = VecTransposeImage(eval_env)
         except Exception:
-            # Best-effort only; if this fails, we still continue and SB3 will
-            # emit its warning if types differ.
             pass
 
         eval_callback = EvalCallback(
@@ -109,7 +125,6 @@ class Trainer:
         )
 
         # ✅ Early stopping (optional)
-        # Allow YAML to set `early_stop: null` — coerce None -> {} so `.get` works below
         early_cfg = self.cfg.get("early_stop") or {}
         early_cb = None
         if early_cfg.get("enabled", True):
@@ -119,7 +134,6 @@ class Trainer:
                 min_delta=float(early_cfg.get("min_delta", 1.0)),
             )
 
-        # Combine all callbacks
         callbacks = [checkpoint_callback, eval_callback]
         if early_cb:
             callbacks.append(early_cb)
@@ -148,6 +162,6 @@ def load_config(config_path: str) -> dict:
 
 if __name__ == "__main__":
     # Example for direct execution
-    cfg = load_config("trainer/config.yaml")
+    cfg = load_config("trainer/config.yaml") 
     trainer = Trainer(cfg, log_dir="./runs/example_run")
     trainer.train()

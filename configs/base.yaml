@@ -1,20 +1,63 @@
-algo: ppo
-total_timesteps: 8
+# --- General Settings ---
+# These are used by train.py and runner.py
+env_id: "ALE/Pong-v5" 
+base_log_dir: "./runs"
+total_timesteps: 8000  # You can override this with --total-timesteps
 n_envs: 8
 frame_stack: 4
 seed: 0
-learning_rate: 2.5e-4
-n_steps: 128
-batch_size: 256
-n_epochs: 4
-gamma: 0.99
-ent_coef: 0.01
-clip_range: 0.1
-device: cuda
+device: "cpu"         # You can override this with --device
+
+# --- Algorithm Selection ---
+# This is the key read by runner.py.
+# You can override this with --algo PPO, --algo DQN, etc.
+algorithm: "PPO" 
+
+# --- Algorithm-Specific Hyperparameters ---
+# runner.py will read the section that matches the 'algorithm' key
+algo_params:
+  PPO:
+    # Hyperparameters specific to PPO
+    policy: "CnnPolicy" 
+    learning_rate: 2.5e-4
+    n_steps: 128
+    batch_size: 256
+    n_epochs: 4
+    gamma: 0.99
+    ent_coef: 0.01
+    clip_range: 0.1
+
+  DQN:
+    # Hyperparameters specific to DQN
+    policy: "CnnPolicy"
+    learning_rate: 0.0001
+    buffer_size: 100000
+    learning_starts: 10000
+    batch_size: 32
+    tau: 1.0
+    gamma: 0.99
+    train_freq: 4
+    gradient_steps: 1
+    target_update_interval: 1000
+    exploration_fraction: 0.1
+    exploration_final_eps: 0.01
+
+  A2C:
+    # Hyperparameters specific to A2C
+    policy: "CnnPolicy"
+    learning_rate: 0.0007
+    n_steps: 5
+    gamma: 0.99
+    ent_coef: 0.01
+    vf_coef: 0.5
+    
+# --- Callback Settings ---
+# These are general, so they stay at the top level
 checkpoint_freq: 100000
 eval_freq: 200000
 n_eval_episodes: 10
+
 early_stop:
-enabled: true
-patience: 5 # number of consecutive evals with no improvement
-min_delta: 1.0 # minimum improvement in eval reward to count
+  enabled: true
+  patience: 5
+  min_delta: 1.0
