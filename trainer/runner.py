@@ -7,6 +7,7 @@ import ale_py
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.logger import configure
+from stable_baselines3.common.vec_env.vec_transpose import VecTransposeImage
 
 from .envs import make_atari_env
 from .callbacks import EarlyStopOnReward
@@ -74,9 +75,28 @@ class Trainer:
         eval_freq_per_env = max(1, eval_freq // max(1, n_envs))
         n_eval_episodes = int(self.cfg.get("n_eval_episodes", 10))
 
+        # Create eval env with the same vectorization backend as training to avoid
+        # "Training and eval env are not of the same type" warnings from SB3.
         eval_env = make_atari_env(
-            env_id, n_envs=1, seed=seed + 42, frame_stack=frame_stack, use_subproc=False
+            env_id, n_envs=1, seed=seed + 42, frame_stack=frame_stack, use_subproc=use_subproc
         )
+
+        # Ensure eval env has the same top-level Vec wrapper as the training env.
+        # SB3 sometimes wraps the training env in VecTransposeImage (to reorder
+        # image channels) when the model is created; if so, wrap the eval_env
+        # the same way to avoid the SB3 warning about mismatched env types.
+        try:
+            # If SB3 wrapped the training env in VecTransposeImage (it does this
+            # automatically for image observations), wrap the eval_env the same
+            # way so the top-level types match and SB3 won't warn.
+            if isinstance(model.get_env(), VecTransposeImage) or (
+                "VecTransposeImage" in repr(model.get_env())
+            ):
+                eval_env = VecTransposeImage(eval_env)
+        except Exception:
+            # Best-effort only; if this fails, we still continue and SB3 will
+            # emit its warning if types differ.
+            pass
 
         eval_callback = EvalCallback(
             eval_env,
@@ -89,7 +109,8 @@ class Trainer:
         )
 
         # ✅ Early stopping (optional)
-        early_cfg = self.cfg.get("early_stop", {})
+        # Allow YAML to set `early_stop: null` — coerce None -> {} so `.get` works below
+        early_cfg = self.cfg.get("early_stop") or {}
         early_cb = None
         if early_cfg.get("enabled", True):
             early_cb = EarlyStopOnReward(

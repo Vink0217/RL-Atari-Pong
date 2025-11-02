@@ -18,7 +18,10 @@ class EarlyStopOnReward(BaseCallback):
     def _on_step(self) -> bool:
     # The eval callback stores last_mean_reward on its object when it runs
         last = getattr(self.eval_callback, "last_mean_reward", None)
-        if last is None:
+        # Some EvalCallback implementations set last_mean_reward to -inf when no
+        # episodes were completed during evaluation. Treat -inf the same as None
+        # (i.e. skip this check until a finite reward appears).
+        if last is None or last == -float("inf"):
             return True
 
         if last > self.best_mean_reward + self.min_delta:

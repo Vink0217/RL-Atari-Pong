@@ -6,6 +6,7 @@ Compatible with Windows (spawn-safe) multiprocessing.
 """
 
 import os
+import sys
 import gymnasium as gym
 import ale_py
 import argparse
@@ -14,6 +15,14 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
+
+# Optional: use the Trainer and load_config helper when a YAML is supplied
+try:
+    from trainer.runner import load_config, Trainer
+except Exception:
+    # Keep backward compatibility if trainer package isn't importable for some reason
+    load_config = None
+    Trainer = None
 
 
 def make_env():
@@ -36,8 +45,51 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda", help="Device: 'cuda' or 'cpu'")
     parser.add_argument("--log-dir", type=str, default="./ppo_pong_logs", help="Logging directory")
     parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint save frequency")
+    parser.add_argument("--config", type=str, default=None, help="Path to a YAML config file (optional)")
 
     args = parser.parse_args()
+
+    # If a YAML config is provided, prefer using the Trainer in trainer/runner.py
+    if args.config:
+        if load_config is None or Trainer is None:
+            raise RuntimeError("trainer.runner module not available - cannot load YAML config")
+
+        # Load YAML config
+        cfg = load_config(args.config)
+
+        # Map CLI flags to config keys (CLI should override YAML when explicitly passed)
+        cli_to_cfg = {
+            "total-timesteps": "total_timesteps",
+            "n-envs": "n_envs",
+            "device": "device",
+            "env": "env_id",
+            "log-dir": "log_dir",
+            "save-freq": "checkpoint_freq",
+        }
+
+        # Helper to check whether a CLI flag was explicitly provided
+        def cli_passed(flag: str) -> bool:
+            for a in sys.argv[1:]:
+                if a == f"--{flag}" or a.startswith(f"--{flag}="):
+                    return True
+            return False
+
+        # Apply overrides from CLI for flags the user explicitly passed
+        for cli_flag, cfg_key in cli_to_cfg.items():
+            if cli_passed(cli_flag):
+                # argparse destination uses underscores instead of dashes
+                dest = cli_flag.replace("-", "_")
+                val = getattr(args, dest)
+                # convert types if necessary (keep YAML values types otherwise)
+                cfg[cfg_key] = val
+
+        # Determine log_dir: config beats default, but CLI --log-dir overrides above
+        log_dir = cfg.get("log_dir", args.log_dir)
+
+        print(f"[train.py] Starting Trainer with config: {args.config} | log_dir={log_dir}")
+        trainer = Trainer(cfg, log_dir=log_dir)
+        trainer.train()
+        sys.exit(0)
 
     # ✅ Windows requires the "spawn" guard
     num_envs = args.n_envs
