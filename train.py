@@ -41,7 +41,7 @@ def make_env():
 
 if __name__ == "__main__":
     # ✅ Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Train PPO on Atari Pong")
+    parser = argparse.ArgumentParser(description="Train Atari Agent")
 
     parser.add_argument("--env", type=str, default="ALE/Pong-v5", help="Environment ID")
     parser.add_argument("--total-timesteps", type=int, default=10_000_000, help="Total timesteps for training")
@@ -51,6 +51,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint save frequency")
     parser.add_argument("--config", type=str, default=None, help="Path to a YAML config file (optional)")
     parser.add_argument("--algo", type=str, default=None, help="Algorithm to use (PPO, DQN, A2C). Overrides config.")
+    parser.add_argument("--load-model", type=str, default=None, help="Path to a saved model to load and continue training.")
 
     args = parser.parse_args()
 
@@ -63,15 +64,15 @@ if __name__ == "__main__":
         cfg = load_config(args.config)
 
         # --- CLI Overrides ---
-        # 2. ADD THE 'algo' MAPPING TO THIS DICTIONARY
         cli_to_cfg = {
             "total-timesteps": "total_timesteps",
             "n-envs": "n_envs",
             "device": "device",
             "env": "env_id",
-            "log-dir": "base_log_dir", # CLI --log-dir overrides base_log_dir in YAML
+            "log-dir": "base_log_dir", 
             "save-freq": "checkpoint_freq",
-            "algo": "algorithm"  # <-- THIS IS THE NEW, CORRECTED LINE
+            "algo": "algorithm",
+            "load-model": "load_model"  # <--- 2. ADD THIS MAPPING ---
         }
 
         def cli_passed(flag: str) -> bool:
@@ -85,33 +86,40 @@ if __name__ == "__main__":
             if cli_passed(cli_flag):
                 dest = cli_flag.replace("-", "_")
                 val = getattr(args, dest)
-                # Only override if the flag was passed (val is not None)
                 if val is not None:
                     cfg[cfg_key] = val
         # --- End Overrides ---
 
+        # <--- 3. ADD NEW LOG DIR LOGIC ---
         # Get values from config (now with CLI overrides applied)
-        base_log_dir = cfg.get("base_log_dir", args.log_dir) 
-        env_id = cfg.get("env_id", "ALE/Pong-v5")
-        algo = cfg.get("algorithm", "PPO") # This will now be set by --algo if passed
+        load_path = cfg.get("load_model")
         
-        # Use your helper to create a unique dir
-        run_dir = make_run_dir(base_log_dir, env_id, algo)
+        if load_path:
+            # Resuming training: Create a 'resume_1' sub-folder in the original run dir
+            parent_dir = os.path.dirname(load_path)
+            run_dir = os.path.join(parent_dir, "resume_run")
+            os.makedirs(run_dir, exist_ok=True)
+            print(f"[train.py] Resuming training. Loading model from: {load_path}")
+        else:
+            # Starting new run: Create a unique timestamped folder
+            base_log_dir = cfg.get("base_log_dir", args.log_dir) 
+            env_id = cfg.get("env_id", "ALE/Pong-v5")
+            algo = cfg.get("algorithm", "PPO") 
+            run_dir = make_run_dir(base_log_dir, env_id, algo)
         
         print(f"[train.py] Starting Trainer with config: {args.config}")
-        print(f"[train.py] Algorithm: {algo}")
+        print(f"[train.py] Algorithm: {cfg.get('algorithm', 'PPO')}")
         print(f"[train.py] Logging to: {run_dir}")
-        pretty_print_cfg(cfg) # Use your pretty printer!
+        pretty_print_cfg(cfg) 
         
-        # Save the *final* config (with overrides) to the run dir
         save_config(cfg, os.path.join(run_dir, "config.json"))
 
-        # Pass the unique run_dir to the Trainer
         trainer = Trainer(cfg, log_dir=run_dir) 
         trainer.train()
         sys.exit(0)
 
     # --- Fallback (non-config) execution ---
+    # (This part is unchanged)
     print("[train.py] No --config provided, running with CLI args and hardcoded PPO.")
     
     num_envs = args.n_envs

@@ -58,6 +58,6 @@ eval_freq: 200000
 n_eval_episodes: 10
 
 early_stop:
-  enabled: true
+  enabled: false
   patience: 5
   min_delta: 1.0
