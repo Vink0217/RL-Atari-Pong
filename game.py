@@ -16,7 +16,7 @@ ALGO_MAP = {"PPO": PPO, "A2C": A2C, "DQN": DQN}
 
 parser = argparse.ArgumentParser(description="Watch a trained agent play Atari.")
 parser.add_argument("model", help="Path to the saved SB3 model zip file")
-parser.add_argument("--env", default="ALE/Pong-v5", help="Gym environment ID (e.g., ALE/Breakout-v5)")
+parser.add_argument("--env", default="ALE/SpaceInvaders-v5", help="Gym environment ID (e.g., ALE/Breakout-v5)")
 args = parser.parse_args()
 
 MODEL_PATH = args.model
