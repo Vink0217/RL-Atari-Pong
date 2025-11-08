@@ -26,18 +26,19 @@ class GpuPreprocessingFeaturesExtractor(BaseFeaturesExtractor):
         else:
             n_input_channels = shape[-1]
 
-        if n_input_channels != 12:
+        # Now we expect 12 channels (4 stacked frames × 3 RGB channels)
+        expected_channels = 12
+        if n_input_channels != expected_channels:
             raise ValueError(
-                f"Expected 12 input channels (4 stacked RGB frames), got {n_input_channels}. "
-                f"Observation space shape: {shape}. If you're using VecFrameStack, ensure the frames "
-                f"are stacked along the channel dimension (resulting in C=12 for 4xRGB frames)."
+                f"Expected {expected_channels} input channels (4 frames x 3 RGB), got {n_input_channels}. "
+                f"Observation space shape: {shape}. Make sure frame_stack=4 and RGB frames."
             )
         
         super().__init__(observation_space, features_dim)
 
         self.preprocessor = nn.Sequential(
-            _StackGrayscale(),
-            transforms.Resize((84, 84), antialias=True)
+            _StackGrayscale(),  # Converts 12 channels (4×RGB) to 4 channels
+            nn.BatchNorm2d(4),  # Normalize for stable training
         )
 
         self.cnn = nn.Sequential(

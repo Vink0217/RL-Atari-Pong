@@ -2,11 +2,12 @@
 # These are used by train.py and runner.py
 env_id: "ALE/MsPacman-v5" 
 base_log_dir: "./runs"
-total_timesteps: 8000  # You can override this with --total-timesteps
-n_envs: 8
+total_timesteps: 10000000  # You can override this with --total-timesteps
+n_envs: 64  # Optimized for A100 GPU
 frame_stack: 4
 seed: 0
-device: "cpu"         # You can override this with --device
+device: "cuda"        # Default to GPU training
+use_subproc: true    # Use parallel env processing
 
 # --- Algorithm Selection ---
 # This is the key read by runner.py.
@@ -17,15 +18,17 @@ algorithm: "PPO"
 # runner.py will read the section that matches the 'algorithm' key
 algo_params:
   PPO:
-    # Hyperparameters specific to PPO
+    # Hyperparameters specific to PPO (optimized for A100 throughput)
     policy: "CnnPolicy" 
     learning_rate: 2.5e-4
-    n_steps: 128
-    batch_size: 256
+    n_steps: 256      # Larger steps for better trajectory collection
+    batch_size: 2048  # Large batch for maximum GPU utilization
     n_epochs: 4
     gamma: 0.99
     ent_coef: 0.01
     clip_range: 0.1
+    gae_lambda: 0.95
+    normalize_advantage: true
 
   DQN:
     # Hyperparameters specific to DQN

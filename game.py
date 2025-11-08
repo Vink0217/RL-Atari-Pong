@@ -1,49 +1,26 @@
 import gymnasium as gym
 import ale_py
 import os
-import argparse  # <--- 1. IMPORT argparse
-from gymnasium.wrappers import ResizeObservation, GrayscaleObservation
-from gymnasium import Wrapper
+import argparse
 from stable_baselines3 import PPO, A2C, DQN
-
-# 1. Import the SB3 wrappers we ACTUALLY use in training
 from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.monitor import Monitor
 
+# Import the wrapper used during training
+from trainer.fast_atari_wrappers import FastAtariWrapper
+
 # --- Configuration ---
-# 2. DELETE the hard-coded MODEL_PATH. We get it from the command line now.
 ALGO_MAP = {"PPO": PPO, "A2C": A2C, "DQN": DQN}
-
-# --- Wrapper copied from trainer/envs.py ---
-# This class is unchanged and correct.
-class RepeatAction(Wrapper):
-    def __init__(self, env, repeat: int = 2):
-        super().__init__(env)
-        self.repeat = repeat
-
-    def step(self, action):
-        total_reward = 0.0
-        terminated = truncated = False
-        info = {}
-        for _ in range(self.repeat):
-            obs, reward, term, trunc, info = self.env.step(action)
-            total_reward += reward
-            terminated = terminated or term
-            truncated = truncated or trunc
-            if terminated or truncated:
-                break
-        return obs, total_reward, terminated, truncated, info
 
 # --- Main Script ---
 
-# 3. ADD ARGUMENT PARSING to get the model and env from the CLI
 parser = argparse.ArgumentParser(description="Watch a trained agent play Atari.")
 parser.add_argument("model", help="Path to the saved SB3 model zip file")
 parser.add_argument("--env", default="ALE/Pong-v5", help="Gym environment ID (e.g., ALE/Breakout-v5)")
 args = parser.parse_args()
 
 MODEL_PATH = args.model
-ENV_ID = args.env  # <-- Use the env ID from the argument
+ENV_ID = args.env
 
 if not os.path.exists(MODEL_PATH):
     print("="*50)
@@ -63,28 +40,24 @@ print(f"Loading {algo_name} model from: {MODEL_PATH}")
 ModelClass = ALGO_MAP[algo_name]
 model = ModelClass.load(MODEL_PATH)
 
-# Create the *factory function* to build the env
-# 4. PASS THE ENV_ID as an argument
-def make_env(env_id_to_make):
+# Create the factory function to build the env, using the correct wrappers
+def make_env(env_id_to_make, seed=0):
     def _init():
         gym.register_envs(ale_py)
-        # 5. USE THE env_id_to_make VARIABLE instead of hard-coded "Pong"
-        env = gym.make(env_id_to_make, render_mode="human")
-        # Apply wrappers in the EXACT SAME order as envs.py
-        env = RepeatAction(env, repeat=2)
-        env = Monitor(env) 
-        env = ResizeObservation(env, (84, 84))
-        env = GrayscaleObservation(env, keep_dim=True)
+        # IMPORTANT: Set render_mode to "human" and use the same settings as training
+        env = gym.make(env_id_to_make, render_mode="human", obs_type="rgb", frameskip=1)
+        env.reset(seed=seed)
+        env = Monitor(env)
+        # Use the same wrapper as in training, but disable terminal_on_life_loss for viewing
+        env = FastAtariWrapper(env, frame_skip=4, screen_size=84, terminal_on_life_loss=False)
         return env
     return _init
 
 # Create a DummyVecEnv
 print(f"Applying wrappers and creating env: {ENV_ID}")
-# 6. PASS THE ENV_ID to the make_env function
 env = DummyVecEnv([make_env(ENV_ID)])
 
-# Wrap it with VecFrameStack
-# This MUST match 'frame_stack: 4' in your base.yaml
+# Wrap it with VecFrameStack, this MUST match training config (e.g., frame_stack: 4)
 env = VecFrameStack(env, 4) 
 
 print("Wrappers applied. Starting game...")

@@ -11,7 +11,8 @@ from stable_baselines3 import PPO, A2C, DQN
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env.vec_transpose import VecTransposeImage
-from stable_baselines3.common.policies import ActorCriticCnnPolicy # <-- Import base policy
+from stable_baselines3.common.policies import ActorCriticCnnPolicy
+import numpy as np
 
 from .envs import make_atari_env
 from .callbacks import EarlyStopOnReward, RotatingCheckpointCallback 
@@ -30,10 +31,11 @@ class Trainer:
         self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # --- 2. Add hardware-aware flags ---
+        # --- Hardware setup and performance monitoring ---
         self.is_gpu_available = torch.cuda.is_available() and self.cfg.get("device", "auto") != "cpu"
-        self.use_cpu_preprocessing = not self.is_gpu_available
         self.device = self.cfg.get("device", "auto")
+        self.last_print_time = time.time()
+        self.last_timesteps = 0
 
         # Diagnostic info to help detect venv/interpreter mismatches.
         # This prints the Python executable and torch CUDA availability so
@@ -54,6 +56,16 @@ class Trainer:
         
         AlgoClass = ALGO_MAP[algo_name]
         algo_params = self.cfg.get("algo_params", {}).get(algo_name, {})
+        
+        # Performance optimization: Set some parameters that can't go in YAML
+        if algo_name == "PPO":
+            # Use vectorized operations where possible
+            algo_params["vf_coef"] = 0.5  # Value function coefficient
+            algo_params["max_grad_norm"] = 0.5  # Gradient clipping
+            # For PyTorch performance
+            device = torch.device(self.device)
+            if device.type == "cuda":
+                torch.backends.cudnn.benchmark = True  # Optimize CUDNN
 
         # --- 3. Smartly select the policy ---
         policy_to_use = "CnnPolicy" # Default
@@ -106,7 +118,8 @@ class Trainer:
             seed=seed, 
             frame_stack=frame_stack, 
             use_subproc=use_subproc,
-            use_cpu_preprocessing=self.use_cpu_preprocessing # <-- Pass the flag!
+            terminal_on_life_loss=True,  # Help exploration
+            use_efficient_wrappers=True  # Use fast cv2-based processing
         )
         
         new_logger = configure(self.log_dir, ["stdout", "csv", "tensorboard"])
@@ -155,7 +168,8 @@ class Trainer:
             seed=seed + 42, 
             frame_stack=frame_stack, 
             use_subproc=False, # Eval env is always 1, so no subproc
-            use_cpu_preprocessing=self.use_cpu_preprocessing
+            terminal_on_life_loss=True,
+            use_efficient_wrappers=True
         )
         # ... (VecTransposeImage check is unchanged) ...
         try:
@@ -163,6 +177,7 @@ class Trainer:
                 eval_env = VecTransposeImage(eval_env)
         except Exception:
             pass
+        # Enhanced eval callback with verbose=1 and custom name
         eval_callback = EvalCallback(
             eval_env,
             best_model_save_path=self.log_dir,
@@ -171,6 +186,8 @@ class Trainer:
             n_eval_episodes=n_eval_episodes,
             deterministic=True,
             render=False,
+            verbose=1,  # Enable verbose output
+            name_prefix="eval"  # Add a prefix for clarity
         )
         early_cfg = self.cfg.get("early_stop") or {}
         early_cb = None
@@ -188,6 +205,53 @@ class Trainer:
         total_timesteps = int(self.cfg.get("total_timesteps", 5_000_000))
         print(f"[Trainer] Starting training for {total_timesteps:,} timesteps...")
         start_time = time.time()
+        # Add FPS monitoring callback
+        from stable_baselines3.common.callbacks import BaseCallback
+        
+        class FPSCallback(BaseCallback):
+            def __init__(self, trainer, verbose=1):
+                super().__init__(verbose)
+                self.trainer = trainer
+                self.start_time = None
+                self.last_print = None
+                self.last_timesteps = 0
+
+            def _on_training_start(self):
+                self.start_time = time.time()
+                self.last_print = self.start_time
+
+            def _on_step(self) -> bool:
+                cur_time = time.time()
+                if cur_time - self.last_print >= 10.0:  # Print every 10 seconds
+                    timesteps = self.num_timesteps
+                    fps = (timesteps - self.last_timesteps) / (cur_time - self.last_print)
+                    elapsed_time = cur_time - self.start_time
+                    progress = (timesteps / total_timesteps) * 100
+                    
+                    # Format with color for visibility
+                    self.logger.record("train/fps", fps)
+                    print(f"\033[1m\033[34m"  # Bold blue
+                          f"Steps: {timesteps:,} ({progress:.1f}%) | "
+                          f"FPS: {fps:.1f} | "
+                          f"Elapsed: {elapsed_time/3600:.1f}h"
+                          f"\033[0m")  # Reset color
+                    
+                    if torch.cuda.is_available():
+                        try:
+                            allocated = torch.cuda.memory_allocated() / 1024**3
+                            reserved = torch.cuda.memory_reserved() / 1024**3
+                            print(f"\033[33m"  # Yellow
+                                  f"GPU Mem (Used/Reserved): {allocated:.1f}GB/{reserved:.1f}GB"
+                                  f"\033[0m")
+                        except Exception as e:
+                            print(f"\033[33mGPU stats error: {e}\033[0m")
+                    
+                    self.last_print = cur_time
+                    self.last_timesteps = timesteps
+                return True
+
+        callbacks.append(FPSCallback(self))
+        
         model.learn(
             total_timesteps=total_timesteps, 
             callback=callbacks, 
