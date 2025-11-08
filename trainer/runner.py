@@ -3,7 +3,7 @@ import yaml
 import time
 import gymnasium as gym
 import ale_py
-import torch  # <-- Import PyTorch
+import torch  
 import sys
 import os as _os
 
@@ -171,7 +171,6 @@ class Trainer:
             terminal_on_life_loss=True,
             use_efficient_wrappers=True
         )
-        # ... (VecTransposeImage check is unchanged) ...
         try:
             if isinstance(model.get_env(), VecTransposeImage) or ("VecTransposeImage" in repr(model.get_env())):
                 eval_env = VecTransposeImage(eval_env)
@@ -187,7 +186,6 @@ class Trainer:
             deterministic=True,
             render=False,
             verbose=1,  # Enable verbose output
-            name_prefix="eval"  # Add a prefix for clarity
         )
         early_cfg = self.cfg.get("early_stop") or {}
         early_cb = None

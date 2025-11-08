@@ -33,8 +33,8 @@ image = (
         "ale-py==0.11.2",
         "pyyaml==6.0.3",
         "opencv-python-headless",  # Faster than opencv-python
-        "tensorboard",
-        "pynvml",  # For GPU monitoring
+    "tensorboard",
+    "nvidia-ml-py",  # Replacement for deprecated pynvml
     )
     # copy the repository into the image
     .add_local_dir(".", remote_path="/root/project", copy=True)
